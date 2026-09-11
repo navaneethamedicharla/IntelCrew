@@ -98,7 +98,7 @@ Copy `.env.example` to `.env` and configure:
 | `OPENAI_API_KEY` | One of these three | OpenAI API key |
 | `GROQ_API_KEY` | One of these three | Groq API key (fast, free tier) |
 | `LLM_MODEL` | Yes | Model ID matching your provider (see below) |
-| `TAVILY_API_KEY` | Optional | Tavily search (more reliable than DDG) |
+| `TAVILY_API_KEY` | Yes | Tavily search (more reliable than DDG) |
 | `LANGSMITH_API_KEY` | Optional | LangSmith tracing |
 | `RAG_ENABLED` | Optional | `true`/`false` — enable FAISS knowledge base |
 
