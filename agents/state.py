@@ -175,7 +175,8 @@ class FinalReport(BaseModel):
     references: List[Citation] = Field(default_factory=list)
     run_metadata: Dict[str, Any] = Field(default_factory=dict)
     audit_summary: str = ""
-    markdown_content: str = ""
+    markdown_content: str = ""      # Full markdown for in-app display (includes metadata)
+    pdf_markdown: str = ""          # Lean markdown for PDF export (no metadata/audit pages)
     citation_coverage: float = 0.0
     overall_confidence: float = 0.0
     word_count: int = 0

@@ -61,7 +61,9 @@ def build_markdown_report(
     audit_summary: str = "",
 ) -> str:
     """
-    Assemble a full Markdown report string from section strings.
+    Assemble the full Markdown report string (used for in-app display).
+    Includes Run Metadata and Audit sections for transparency in the UI.
+    The PDF export uses build_pdf_markdown() which omits these to save pages.
     """
     now = datetime.utcnow().strftime("%B %d, %Y")
     lines: List[str] = []
@@ -83,7 +85,7 @@ def build_markdown_report(
     # References
     lines.append(format_references_section(citations))
 
-    # Run metadata footer
+    # Run metadata footer (app display only)
     if run_metadata:
         lines.append("---\n")
         lines.append("## Run Metadata\n")
@@ -103,6 +105,42 @@ def build_markdown_report(
     if audit_summary:
         lines.append("\n## Audit & Governance\n")
         lines.append(audit_summary)
+
+    return "\n".join(lines)
+
+
+def build_pdf_markdown(
+    topic: str,
+    executive_summary: str,
+    competitor_pricing: str,
+    product_updates: str,
+    market_signals: str,
+    business_risks: str,
+    strategic_recommendations: str,
+    opportunities: str,
+    citations: List[Citation],
+) -> str:
+    """
+    Assemble a lean Markdown string for PDF export.
+    Omits Run Metadata and Audit sections — those are internal debug data
+    that bloat the page count. The PDF should be a clean executive document.
+    """
+    now = datetime.utcnow().strftime("%B %d, %Y")
+    lines: List[str] = []
+
+    lines.append(f"# Competitive Intelligence Briefing: {topic}")
+    lines.append(f"_Generated on {now}_\n")
+    lines.append("---\n")
+
+    lines.append(_section("Executive Summary",          executive_summary          or "_Not available._"))
+    lines.append(_section("Competitor Pricing",         competitor_pricing         or "_No pricing data found._"))
+    lines.append(_section("Competitor Product Updates", product_updates            or "_No product updates found._"))
+    lines.append(_section("Market Signals",             market_signals             or "_No market signals found._"))
+    lines.append(_section("Business Risks",             business_risks             or "_No risks identified._"))
+    lines.append(_section("Strategic Recommendations",  strategic_recommendations  or "_No recommendations._"))
+    lines.append(_section("Opportunities",              opportunities              or "_No opportunities identified._"))
+
+    lines.append(format_references_section(citations))
 
     return "\n".join(lines)
 
@@ -165,6 +203,18 @@ def assemble_final_report(
         audit_summary=audit_summary,
     )
 
+    pdf_md = build_pdf_markdown(
+        topic=topic,
+        executive_summary=executive_summary,
+        competitor_pricing=competitor_pricing,
+        product_updates=product_updates,
+        market_signals=market_signals,
+        business_risks=business_risks,
+        strategic_recommendations=strategic_recommendations,
+        opportunities=opportunities,
+        citations=citations,
+    )
+
     word_count = len(markdown.split())
 
     return FinalReport(
@@ -181,6 +231,7 @@ def assemble_final_report(
         run_metadata=run_metadata.dict() if run_metadata else {},
         audit_summary=audit_summary,
         markdown_content=markdown,
+        pdf_markdown=pdf_md,
         citation_coverage=citation_coverage,
         overall_confidence=overall_confidence,
         word_count=word_count,

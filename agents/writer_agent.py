@@ -17,6 +17,7 @@ from agents.base_agent import (
     add_error,
     add_trace,
     call_with_retry,
+    call_llm_with_retry,
     check_runaway,
     get_llm,
     increment_step,
@@ -37,23 +38,19 @@ from tools.report_generator import assemble_final_report
 logger = logging.getLogger(__name__)
 AGENT_NAME = "writer_agent"
 
-_SYSTEM_PROMPT = """You are a Principal Analyst at a top-tier competitive intelligence firm, writing for a VP of Strategy and the C-suite. Your reports are read by executives who make million-dollar decisions based on them.
+_SYSTEM_PROMPT = """You are a Principal Analyst at a top-tier competitive intelligence firm writing for a C-suite audience.
 
-Writing standards:
-- Style: Professional consulting (Gartner, McKinsey, Deloitte). Direct, assertive, analytical.
-- Never use vague filler like "it is important to note" or "there are several factors." State the finding directly.
-- Every paragraph must deliver a specific insight, not just describe what happened — explain WHY it matters competitively.
-- Compare competitors explicitly (e.g., "Salesforce's Einstein GPT undercuts HubSpot's AI tier by 30% at the enterprise level").
-- Quantify wherever the data supports it. Use specific numbers, percentages, product names, and dates from the sources.
-- Rank findings by strategic importance — the most critical insight comes first.
-- Distinguish CLEARLY between verified findings and unverified findings:
-  * Verified findings: state confidently with citation context
-  * Unverified findings: use "According to unconfirmed reports..." or "Sources suggest, though unverified, that..." — NEVER omit them entirely
-- If a section has limited data, write what IS known and state the confidence level. NEVER write "No analysis could be generated."
-- Use bullet points for enumerated lists. Use prose for analysis and synthesis.
-- Include a competitor comparison table (markdown format) whenever 2+ competitors have comparable data points.
-- Actionable recommendations must be specific: "Consider launching a mid-market pricing tier at $X/seat to counter Y's recent discount" not "Consider improving pricing strategy."
-- Each section should be thorough and complete — aim for 400-600 words of substantive analysis per section. Do NOT truncate or summarize prematurely. Cover all relevant data points from the context."""
+Your job is to SUMMARIZE and PRIORITIZE — not to dump everything you know.
+
+Core rules:
+- Each section is a tight executive summary of that topic. Lead with the most important finding. Cut everything that doesn't add new information.
+- Every sentence must earn its place: if it repeats something already said or adds no new fact, cut it.
+- Be specific: name entities, numbers, dates from the sources. Never be vague.
+- Structure: 1 opening insight sentence → 3-5 key points (bullets if listing, prose if analyzing) → 1 closing "so what."
+- Verified findings: state confidently. Unverified: prefix with "Unconfirmed —".
+- Include a compact comparison table only when 2+ entities have directly comparable data.
+- Recommendations must name a specific action, not a category.
+- The goal is a report a senior executive can read in under 5 minutes and act on immediately."""
 
 
 # ── Context helpers ───────────────────────────────────────────────────────────
@@ -207,8 +204,47 @@ def _build_context(
 # ── LLM section writer ────────────────────────────────────────────────────────
 
 
+
+# ── Placeholder detection (module-level so writer_node can also use it) ───────
+# These phrases indicate the LLM produced a cop-out / refusal instead of real
+# analysis. They must be matched as STANDALONE phrases, not substrings, to
+# avoid false positives on valid text like "Google constrained its API pricing".
+_PLACEHOLDER_PHRASES = (
+    "no analysis could be generated",
+    "limited data was retrieved",
+    "could not be generated",
+    "unable to generate",
+    "insufficient data in retrieved sources",
+    "no relevant information found",
+    "not enough data to generate",
+    "data was not available for this",
+    "research was constrained by",          # only when used as an apology opener
+    "constrained by available source",      # explicit apology form
+    "constrained by the content of",        # explicit apology form
+    "i don't have access to",
+    "i do not have access to",
+    "as an ai, i",
+    "as an ai assistant",
+    "i cannot provide",
+    "i'm unable to",
+    "i am unable to",
+    "require validated competitive data",   # the exact fallback phrase we wrote
+    "require further validation",
+    "please re-run",
+)
+
+
+def _is_placeholder(text: str) -> bool:
+    """Return True only if the text is clearly a refusal/fallback, not real analysis."""
+    t = text.lower().strip()
+    # Too short to be real analysis
+    if len(t) < 80:
+        return True
+    # Check for exact cop-out phrases
+    return any(p in t for p in _PLACEHOLDER_PHRASES)
+
+
 def _write_section(
-    llm,
     section_name: str,
     topic: str,
     context: str,
@@ -218,23 +254,12 @@ def _write_section(
     """
     Call the LLM to write a specific report section.
 
-    If the LLM call raises any exception, return *fallback*.
-    If the LLM returns a placeholder-like response (empty, too short, or contains
-    known fallback phrases), force a second attempt with a stricter prompt.
+    Uses call_llm_with_retry() internally so the model is always rebuilt from
+    the current _active_model — if the first model hits a quota error mid-call,
+    it automatically switches to the next fallback and retries.
+
+    If both attempts return placeholder-like text, returns *fallback*.
     """
-    _PLACEHOLDER_PHRASES = (
-        "no analysis could be generated",
-        "limited data was retrieved",
-        "could not be generated",
-        "no data found",
-        "unable to generate",
-        "no information available",
-    )
-
-    def _is_placeholder(text: str) -> bool:
-        t = text.lower().strip()
-        return len(t) < 80 or any(p in t for p in _PLACEHOLDER_PHRASES)
-
     def _call(instruction_override: str) -> str:
         user_msg = (
             f"Topic: {topic}\n\n"
@@ -242,11 +267,12 @@ def _write_section(
             f"Task: Write the '{section_name}' section. {instruction_override}\n"
             f"Write a thorough, complete section. Use multiple paragraphs and bullet lists as needed. Cover every relevant data point from the context. Be specific, analytical, and comprehensive — do not truncate or summarise prematurely."
         )
-        response = call_with_retry(
-            lambda: llm.invoke([
+        response = call_llm_with_retry(
+            messages=[
                 SystemMessage(content=_SYSTEM_PROMPT),
                 HumanMessage(content=user_msg),
-            ]),
+            ],
+            temperature=0.2,
             max_retries=3,
             base_delay=5.0,
             label=section_name,
@@ -276,7 +302,7 @@ def _write_section(
                 "[writer] Section '%s' still returned placeholder after retry — using fallback",
                 section_name,
             )
-            return fallback or f"Analysis for '{section_name}' could not be completed. Please re-run with additional sources."
+            return fallback or f"_{section_name}: LLM call failed. Re-run to regenerate._"
 
         return result
 
@@ -331,15 +357,46 @@ def writer_node(state: BriefingState) -> BriefingState:
         add_trace(state, AGENT_NAME, "warning", "No verification result available; writer will use defaults.")
 
     try:
-        llm = get_llm(temperature=0.2)
         meta = state.get("run_metadata")
 
         # ── Build rich context for all LLM sections ────────────────────────────
         full_context = _build_context(research, analysis, verification)
 
+        # ── Pre-load analyst syntheses for direct use ─────────────────────────
+        _syntheses: dict = {}
+        if analysis and analysis.section_syntheses:
+            _syntheses = analysis.section_syntheses
+
         # ── Helper to write + track tool call ─────────────────────────────────
-        def write(section_name: str, instruction: str, fallback: str = "") -> str:
-            text = _write_section(llm, section_name, topic, full_context, instruction, fallback)
+        def write(section_name: str, instruction: str, fallback: str = "",
+                  synthesis_key: str = "") -> str:
+            """
+            Write one report section. Always runs the Writer LLM for a final polish
+            pass — even when analyst synthesis is available. The synthesis text is
+            injected into the context so the Writer blends it with raw claims.
+
+            This guarantees every section goes through the Writer's style/quality
+            standards rather than dumping raw synthesis text verbatim.
+            """
+            # Build a section-specific context: analyst synthesis first (if available),
+            # then the full pipeline context as supplementary detail.
+            synth_text = ""
+            if synthesis_key and synthesis_key in _syntheses:
+                synth_text = _syntheses[synthesis_key].strip()
+
+            if synth_text and len(synth_text) >= 100 and not _is_placeholder(synth_text):
+                # Prepend synthesis to the section context so the Writer uses it as
+                # its primary input and enriches it with claims/profiles.
+                section_context = (
+                    f"=== ANALYST PRE-SYNTHESIS FOR THIS SECTION ===\n"
+                    f"{synth_text}\n\n"
+                    f"=== FULL PIPELINE CONTEXT (supplement synthesis with these) ===\n"
+                    f"{full_context[:10000]}"
+                )
+            else:
+                section_context = full_context
+
+            text = _write_section(section_name, topic, section_context, instruction, fallback)
             if meta:
                 meta.tool_calls += 1
             return text
@@ -347,143 +404,99 @@ def writer_node(state: BriefingState) -> BriefingState:
         # ── Section 1: Executive Summary ───────────────────────────────────────
         executive_summary = write(
             "Executive Summary",
-            "Write a comprehensive executive summary that a VP of Strategy can act on immediately. "
-            "Paragraph 1: The single most important competitive development and its strategic implication — explain WHY it matters and what the downstream effect is. "
-            "Paragraph 2: The top 3-5 most significant competitor moves with names, specific actions, dates, and why each matters strategically. "
-            "Paragraph 3: Key market trends and forces shaping the competitive landscape right now. "
-            "Paragraph 4: The top strategic recommendations and the most critical risks to monitor. "
-            "Use specific competitor names, product names, numbers, and market data throughout. "
-            "Mark any unconfirmed findings as 'According to unconfirmed reports...' "
-            "Aim for 300-500 words of substantive content.",
+            "Write the Executive Summary. "
+            "Start with the single most important competitive development from the sources and its strategic implication. "
+            "Then summarize the 2-3 most significant competitor moves — name each entity, the action, and why it matters. "
+            "End with the dominant market trend and the top priority action. "
+            "Only include what is new, specific, and actionable. Cut anything generic.",
             fallback=(
-                f"The research pipeline retrieved {len(research.sources) if research else 0} sources on the topic "
-                f"'{topic}'. The LLM analysis was unable to generate a full summary. "
-                "Key sources retrieved include: "
-                + (", ".join(s.title[:50] for s in (research.sources[:3] if research else [])) or "none")
-                + ". Please re-run with Tavily enabled for richer data, or try a more specific topic."
+                f"{len(research.sources) if research else 0} sources retrieved for '{topic}'. "
+                "Summary generation failed — re-run to regenerate."
             ),
+            synthesis_key="executive_summary",
         )
 
         # ── Section 2: Competitor Pricing ──────────────────────────────────────
         competitor_pricing = write(
             "Competitor Pricing Analysis",
-            "Write a comprehensive pricing analysis covering ALL identified competitors. "
-            "1. Start with a comparison table (markdown) if 2+ competitors have pricing data: columns = Competitor | Pricing Model | Key Tier | Price Point | Recent Change. "
-            "2. After the table, provide deep analysis: who is discounting aggressively, who is moving upmarket, what pricing pressure this creates, and how it affects buyer decisions. "
-            "3. Analyse each competitor's pricing strategy in detail — what it signals about their positioning and growth targets. "
-            "4. Identify pricing anomalies or gaps (e.g., 'No competitor offers a $X/month mid-market tier — this is a white space opportunity'). "
-            "5. Discuss the impact of AI-tier pricing specifically as this is a major differentiator right now. "
-            "6. Mark any unconfirmed pricing data as 'Unconfirmed:' "
-            "Aim for 400-600 words of substantive analysis.",
+            "Write the Competitor Pricing Analysis. "
+            "If 2+ entities have pricing data, open with a compact comparison table (Entity | Key Tier | Price | Notes). "
+            "Then write 2-3 sentences: who leads on price, who targets premium, and the most important pricing gap or opportunity. "
+            "Only include pricing facts from the sources. Mark anything unconfirmed as 'Unconfirmed —'.",
             fallback=(
-                "Specific pricing data could not be extracted from the available sources. "
-                "The research sources retrieved did not contain detailed pricing information. "
-                "Recommended next steps: search directly on competitor pricing pages, or enable Tavily for real-time pricing data."
+                "Pricing data was not present in the retrieved sources. "
+                "Check entity websites directly for current pricing."
             ),
+            synthesis_key="competitor_pricing",
         )
 
-        # ── Section 3: Product Updates ─────────────────────────────────────────
+        # ── Section 3: Recent Developments ────────────────────────────────────
         product_updates = write(
-            "Competitor Product & AI Capability Updates",
-            "Write a comprehensive section covering recent product launches, AI/ML feature releases, platform updates, and technology bets per competitor. "
-            "1. Organise by competitor (use bold competitor names or subheadings). "
-            "2. For each product launch or AI capability: name it specifically, state when it launched (if known), describe what it does, and explain its competitive significance in detail. "
-            "3. Analyse AI-specific capabilities (copilots, automation, generative AI, agentic features) with depth — these are the highest-stakes differentiators. "
-            "4. Identify capability gaps explicitly: 'Competitor X has launched Y — this creates a capability gap that could affect customer retention in segment Z.' "
-            "5. Cover platform integrations, ecosystem expansions, and technology partnerships. "
-            "6. Assess which competitor is moving fastest on the AI roadmap and what that means. "
-            "Mark unconfirmed items as 'Unconfirmed:' "
-            "Aim for 400-600 words of thorough analysis.",
+            "Recent Developments & Capability Updates",
+            "Write the Recent Developments section. "
+            "List only the most significant product launches, service updates, or capability changes from the sources. "
+            "For each: name it, when it happened (if known), and one sentence on why it matters competitively. "
+            "Cut anything minor. Close with one sentence on who is moving fastest and what that means. "
+            "Mark unconfirmed items as 'Unconfirmed —'.",
             fallback=(
-                "Product update data was limited in the available source articles. "
-                "The sources retrieved cover the general market landscape but did not contain specific product launch announcements. "
-                "For real-time product updates, monitor competitor blogs, press release feeds, and product changelogs directly."
+                "No specific product or service updates were found in the retrieved sources."
             ),
+            synthesis_key="product_updates",
         )
 
         # ── Section 4: Market Signals ──────────────────────────────────────────
         market_signals = write(
             "Market Signals & Trends",
-            "Write a comprehensive analysis of key market signals, technology trends, and customer behavior shifts. "
-            "1. Lead with the 3-5 strongest signals, each supported by specific evidence from the sources. "
-            "2. For EACH signal: state the observation in detail, explain the underlying drivers, describe the strategic implication, and assess who benefits or loses. "
-            "3. Provide a deep analysis of AI/automation adoption trends — adoption rates, customer willingness to pay, integration challenges, and who is leading. "
-            "4. Cover customer behavior shifts in detail: what buyers are prioritising, which segments are growing fastest, what is causing churn or switching. "
-            "5. Analyse macro forces: market size data, growth rates, M&A activity, regulatory changes, and funding trends. "
-            "6. Distinguish clearly between confirmed trends (multiple sources) and emerging signals (limited evidence). "
-            "Mark any unconfirmed signals. "
-            "Aim for 400-600 words of substantive analysis.",
+            "Write the Market Signals & Trends section. "
+            "Identify the strongest signals from the sources — only include ones with specific evidence. "
+            "For each signal: state the observation and its strategic implication (who benefits, who is at risk). "
+            "Cut any signal that is generic or unsupported by the sources. "
+            "End with the single biggest macro force shaping this space. "
+            "Mark unconfirmed signals as 'Unconfirmed —'.",
             fallback=(
-                "Market signal analysis was constrained by the content retrievable from available sources. "
-                "The research pipeline identified relevant sources but was unable to extract detailed market signals from their text content. "
-                "General market context: the topic researched is an active, competitive space. Re-run with Tavily for richer market data."
+                f"Market signals for '{topic}' could not be extracted. Re-run to regenerate."
             ),
+            synthesis_key="market_signals",
         )
 
         # ── Section 5: Business Risks ──────────────────────────────────────────
         business_risks = write(
             "Business Risks",
-            "Write a comprehensive risk assessment identifying and ranking all material business risks from the competitive landscape. "
-            "Format: numbered list ranked from highest to lowest severity. "
-            "For EACH risk: "
-            "(1) Name the risk with a descriptive title. "
-            "(2) Describe the risk in detail — what is happening, which competitor or trend creates it, what the mechanism of harm is. "
-            "(3) Assess severity (High/Medium/Low) with specific justification — what is the potential business impact (revenue, market share, customer loss). "
-            "(4) State the timeline — is this an immediate threat (0-6 months), near-term (6-18 months), or strategic horizon (18+ months)? "
-            "(5) Provide a specific mitigation approach with concrete actions. "
-            "Cover all risk categories: pricing pressure, AI capability gaps, talent competition, market share loss, regulatory exposure, platform lock-in, ecosystem risks. "
-            "Mark any unconfirmed risks as 'Unconfirmed risk:' "
-            "Aim for 6-9 detailed risks totalling 400-600 words.",
+            "Write the Business Risks section. "
+            "List only the material risks that are supported by specific evidence from the sources, ranked by severity. "
+            "For each: bold title, one sentence on the threat and potential impact, severity (High/Medium/Low), and one mitigation action. "
+            "Cut speculative or generic risks not grounded in the sources. "
+            "Mark unconfirmed risks as 'Unconfirmed —'.",
             fallback=(
-                "Risk identification was constrained by available source data. "
-                "General risks for this competitive landscape typically include: pricing pressure from incumbents, "
-                "AI capability gaps as competitors embed generative AI features, and market consolidation through M&A. "
-                "A full risk assessment requires richer source data — enable Tavily or add domain-specific sources."
+                "Risk data was limited in the retrieved sources. Re-run for a full risk assessment."
             ),
+            synthesis_key="business_risks",
         )
 
         # ── Section 6: Strategic Recommendations ──────────────────────────────
         strategic_recommendations = write(
             "Strategic Recommendations",
-            "Provide 7-10 specific, evidence-based strategic recommendations ranked by urgency and potential impact. "
-            "Format each recommendation as: "
-            "**[Priority: High/Medium/Low] Recommendation title** "
-            "Rationale: Explain in detail WHY this is recommended, citing the specific competitive evidence, data points, or market signal that makes this urgent. "
-            "Action: The specific, concrete action to take — name the product, team, budget, or partnership involved. "
-            "Expected Outcome: What competitive advantage or risk mitigation this achieves. "
-            "Timeline: Immediate (0-30 days), Near-term (1-3 months), or Strategic (3-12 months). "
-            "Base ALL recommendations on specific evidence from the competitive data above. "
-            "Mark any recommendations based on unconfirmed data. "
-            "Aim for 500-700 words of substantive, actionable guidance.",
+            "Write the Strategic Recommendations section. "
+            "Give only recommendations that are directly supported by evidence from the sources. "
+            "For each: state WHAT to do in one sentence, WHY (cite the specific finding), and the timeline (Immediate / Near-term / Strategic). "
+            "Rank by urgency. Cut anything generic or not grounded in the data.",
             fallback=(
-                "Strategic recommendations require validated competitive data. "
-                "Based on the research conducted, the following general recommendations apply: "
-                "1. Conduct a deeper competitive pricing audit using direct competitor websites. "
-                "2. Monitor competitor AI feature announcements via press releases and product blogs. "
-                "3. Re-run this analysis with Tavily enabled for significantly richer intelligence."
+                f"Recommendations for '{topic}' could not be generated. Re-run to regenerate."
             ),
+            synthesis_key="strategic_recommendations",
         )
 
         # ── Section 7: Opportunities ──────────────────────────────────────────
         opportunities = write(
-            "Market & Competitive Opportunities",
-            "Identify and analyse 5-8 concrete, evidence-based opportunities in detail. "
-            "For EACH opportunity: "
-            "(1) State the opportunity with a clear title and detailed description — what the gap is, what customer need is unmet, or what competitor weakness exists. "
-            "(2) Cite the specific evidence: which competitor weakness, market signal, customer trend, or data point reveals this opportunity. "
-            "(3) Estimate the size, urgency, or value of the opportunity where data supports it (market segment size, revenue potential, number of addressable customers). "
-            "(4) Assess the first-mover advantage window — how long before a competitor closes this gap? "
-            "(5) Suggest a concrete way to capture the opportunity. "
-            "Cover all opportunity types: pricing gaps, geographic expansion, underserved customer segments, "
-            "AI capability gaps in competitor portfolios, partnership plays, acquisition targets, vertical-specific niches. "
-            "Mark speculative opportunities (limited evidence) as 'Potential opportunity (unconfirmed):' "
-            "Aim for 400-600 words of substantive, evidence-backed analysis.",
+            "Key Opportunities",
+            "Write the Key Opportunities section. "
+            "Identify only opportunities that are clearly supported by the sources — a gap, weakness, or unmet need with evidence. "
+            "For each: name the opportunity, cite the evidence, and state one concrete action to capture it. "
+            "Mark speculative opportunities as 'Unconfirmed —'. Cut anything not grounded in the data.",
             fallback=(
-                "Opportunity analysis requires validated competitive data. "
-                "Potential opportunity areas in this competitive landscape typically include: "
-                "underserved mid-market segments, AI-native product differentiation, and vertical-specific solutions. "
-                "A detailed opportunity analysis requires richer source data from additional research runs."
+                f"Opportunity analysis for '{topic}' could not be completed. Re-run to regenerate."
             ),
+            synthesis_key="opportunities",
         )
 
         # ── Generate citations ────────────────────────────────────────────────

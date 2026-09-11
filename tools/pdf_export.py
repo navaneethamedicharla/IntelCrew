@@ -330,43 +330,43 @@ def _build_rl_styles():
     styles["H2"] = ParagraphStyle(
         "H2",
         parent=base["Normal"],
-        fontSize=14,
+        fontSize=12,
         fontName="Helvetica-Bold",
         textColor=_rl_color(NAVY),
-        leading=18,
-        spaceBefore=12,
-        spaceAfter=2,
+        leading=15,
+        spaceBefore=4,
+        spaceAfter=1,
     )
     styles["H3"] = ParagraphStyle(
         "H3",
         parent=base["Normal"],
-        fontSize=11,
+        fontSize=10,
         fontName="Helvetica-Bold",
         textColor=_rl_color(MID_BLUE),
-        leading=15,
-        spaceBefore=6,
-        spaceAfter=2,
+        leading=13,
+        spaceBefore=3,
+        spaceAfter=1,
     )
     styles["Body"] = ParagraphStyle(
         "Body",
         parent=base["Normal"],
-        fontSize=10,
+        fontSize=9,
         fontName="Helvetica",
         textColor=_rl_color(TEXT_DARK),
-        leading=15,
-        spaceAfter=4,
+        leading=12,
+        spaceAfter=2,
     )
     styles["Bullet"] = ParagraphStyle(
         "Bullet",
         parent=base["Normal"],
-        fontSize=10,
+        fontSize=9,
         fontName="Helvetica",
         textColor=_rl_color(TEXT_DARK),
-        leading=14,
+        leading=12,
         leftIndent=14,
-        bulletIndent=0,
-        spaceAfter=2,
-        bulletText="\u2022",
+        firstLineIndent=0,
+        spaceAfter=1,
+        # No bulletText — prefix prepended as plain text to stay Latin-1 safe.
     )
     styles["BlockQuote"] = ParagraphStyle(
         "BlockQuote",
@@ -412,6 +412,62 @@ def _rl_xml(text: str) -> str:
             .replace(">", "&gt;"))
 
 
+# Characters that Helvetica (Latin-1 encoding) cannot render natively.
+# ReportLab substitutes them with a filled square ■ when they appear.
+# Map each to the closest plain-ASCII equivalent.
+_UNICODE_REPLACEMENTS = [
+    # Dashes
+    ("\u2014", "--"),   # em dash —
+    ("\u2013", "-"),    # en dash –
+    ("\u2012", "-"),    # figure dash
+    ("\u2015", "--"),   # horizontal bar
+    # Quotes
+    ("\u2018", "'"),    # left single quotation '
+    ("\u2019", "'"),    # right single quotation '
+    ("\u201a", ","),    # single low-9 quotation ‚
+    ("\u201c", '"'),    # left double quotation "
+    ("\u201d", '"'),    # right double quotation "
+    ("\u201e", '"'),    # double low-9 quotation „
+    # Ellipsis
+    ("\u2026", "..."),  # horizontal ellipsis …
+    # Bullets / list markers
+    ("\u2022", "-"),    # bullet •  (Bullet style adds its own prefix)
+    ("\u2023", "-"),    # triangular bullet ‣
+    ("\u25e6", "-"),    # white bullet ◦
+    ("\u2043", "-"),    # hyphen bullet ⁃
+    # Spaces
+    ("\u00a0", " "),    # non-breaking space
+    ("\u202f", " "),    # narrow no-break space
+    ("\u2009", " "),    # thin space
+    # Misc symbols that appear in LLM output
+    ("\u2192", "->"),   # right arrow →
+    ("\u2190", "<-"),   # left arrow ←
+    ("\u2022", "-"),    # bullet (duplicate guard)
+    ("\u00b7", "-"),    # middle dot ·
+    ("\u00d7", "x"),    # multiplication sign ×
+    ("\u00f7", "/"),    # division sign ÷
+    ("\u2264", "<="),   # ≤
+    ("\u2265", ">="),   # ≥
+    ("\u2260", "!="),   # ≠
+    ("\u00ae", "(R)"),  # ®
+    ("\u2122", "(TM)"), # ™
+    ("\u00a9", "(C)"),  # ©
+]
+
+
+def _normalize_for_pdf(text: str) -> str:
+    """
+    Replace Unicode characters that Helvetica/Latin-1 cannot render.
+    ReportLab falls back to a filled square ■ for any char outside Latin-1;
+    this function substitutes them with ASCII equivalents before rendering.
+    """
+    for char, replacement in _UNICODE_REPLACEMENTS:
+        text = text.replace(char, replacement)
+    # Final sweep: replace any remaining non-Latin-1 character with '?'
+    # (encodes to Latin-1, replaces failures) to prevent any residual ■
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _parse_inline(text: str) -> str:
     """
     Convert common Markdown inline markup to ReportLab XML tags.
@@ -452,10 +508,10 @@ def _build_cover_flowables(topic: str, styles: dict) -> list:
     cover_table = Table([[cover_inner]], colWidths=["100%"])
     cover_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), _rl_color(NAVY)),
-        ("TOPPADDING",    (0, 0), (-1, -1), 28),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 24),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 30),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 30),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 20),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 20),
     ]))
 
     # Meta strip (light accent background)
@@ -475,7 +531,7 @@ def _build_cover_flowables(topic: str, styles: dict) -> list:
         ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
     ]))
 
-    return [cover_table, Spacer(1, 4), meta_table, Spacer(1, 8)]
+    return [cover_table, Spacer(1, 1), meta_table, Spacer(1, 2)]
 
 
 def _h2_with_rule(title: str, styles: dict) -> list:
@@ -486,9 +542,78 @@ def _h2_with_rule(title: str, styles: dict) -> list:
         HRFlowable(
             width="100%", thickness=2,
             color=_rl_color(INDIGO),
-            spaceAfter=4,
+            spaceAfter=2,
         ),
     ]
+
+
+def _is_table_row(line: str) -> bool:
+    """Return True if the line looks like a Markdown pipe-table row."""
+    s = line.strip()
+    return s.startswith("|") and s.endswith("|") and "|" in s[1:-1]
+
+
+def _is_table_separator(line: str) -> bool:
+    """Return True if the line is a Markdown table separator (e.g. |---|---|)."""
+    s = line.strip()
+    if not (s.startswith("|") and s.endswith("|")):
+        return False
+    inner = s[1:-1]
+    return all(
+        cell.strip().replace("-", "").replace(":", "").replace(" ", "") == ""
+        for cell in inner.split("|")
+    )
+
+
+def _build_table_flowable(rows: list, styles: dict):
+    """
+    Convert a list of row-lists (strings) into a styled ReportLab Table flowable.
+    The first row is treated as the header.
+    """
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+
+    if not rows:
+        return None
+
+    # Wrap every cell in a Paragraph for word-wrap
+    wrapped = []
+    for r_idx, row in enumerate(rows):
+        style = styles["TableHeader"] if r_idx == 0 else styles["TableCell"]
+        wrapped.append([
+            Paragraph(_parse_inline(_rl_xml(str(cell).strip())), style)
+            for cell in row
+        ])
+
+    num_cols = max(len(r) for r in wrapped)
+    # Available width ≈ A4 - margins = 210mm - 36mm = 174mm
+    avail_width = 17.4 * cm
+    col_w = avail_width / num_cols
+
+    tbl = Table(wrapped, colWidths=[col_w] * num_cols, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        # Header row
+        ("BACKGROUND",   (0, 0), (-1, 0),  _rl_color(ACCENT_BG)),
+        ("TEXTCOLOR",    (0, 0), (-1, 0),  _rl_color(NAVY)),
+        ("FONTNAME",     (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",     (0, 0), (-1, 0),  9),
+        ("BOTTOMPADDING",(0, 0), (-1, 0),  5),
+        ("TOPPADDING",   (0, 0), (-1, 0),  5),
+        # Body rows
+        ("FONTNAME",     (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE",     (0, 1), (-1, -1), 9),
+        ("TOPPADDING",   (0, 1), (-1, -1), 4),
+        ("BOTTOMPADDING",(0, 1), (-1, -1), 4),
+        # Zebra
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _rl_color(LIGHT_GREY)]),
+        # Grid
+        ("GRID",         (0, 0), (-1, -1), 0.5, _rl_color(RULE_GREY)),
+        ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    return tbl
 
 
 def _parse_markdown_to_flowables(markdown_content: str, styles: dict) -> list:
@@ -520,6 +645,32 @@ def _parse_markdown_to_flowables(markdown_content: str, styles: dict) -> list:
         # Consume ALL consecutive blank lines as one, emit nothing.
         if not stripped:
             i += 1
+            continue
+
+        # ── Markdown pipe table ──────────────────────────────────────────────
+        # Detect a table block: one or more pipe rows, with a separator row.
+        if _is_table_row(stripped):
+            table_lines = []
+            while i < len(lines) and _is_table_row(lines[i].strip()):
+                table_lines.append(lines[i].strip())
+                i += 1
+
+            # Parse rows: split on | and strip; skip separator rows
+            rows = []
+            for tl in table_lines:
+                if _is_table_separator(tl):
+                    continue
+                cells = [c.strip() for c in tl.strip("|").split("|")]
+                if any(cells):
+                    rows.append(cells)
+
+            if rows:
+                from reportlab.platypus import Spacer
+                tbl = _build_table_flowable(rows, styles)
+                if tbl:
+                    story.append(Spacer(1, 4))
+                    story.append(tbl)
+                    story.append(Spacer(1, 4))
             continue
 
         # Horizontal rule
@@ -565,7 +716,7 @@ def _parse_markdown_to_flowables(markdown_content: str, styles: dict) -> list:
         if re.match(r"^[-*] ", stripped):
             text = stripped[2:].strip()
             story.append(Paragraph(
-                "\u2022\u00a0" + _parse_inline(_rl_xml(text)),
+                "- " + _parse_inline(_rl_xml(text)),
                 styles["Bullet"]
             ))
             i += 1
@@ -575,7 +726,7 @@ def _parse_markdown_to_flowables(markdown_content: str, styles: dict) -> list:
         m = re.match(r"^\d+\. (.+)$", stripped)
         if m:
             story.append(Paragraph(
-                "\u2022\u00a0" + _parse_inline(_rl_xml(m.group(1))),
+                "- " + _parse_inline(_rl_xml(m.group(1))),
                 styles["Bullet"]
             ))
             i += 1
@@ -613,13 +764,19 @@ def _styled_reportlab(markdown_content: str, topic: str, out_path: Path) -> bool
         from reportlab.lib.units import cm
         from reportlab.platypus import SimpleDocTemplate
 
+        # Normalise all Unicode to Latin-1 safe equivalents before any
+        # ReportLab processing — prevents the ■ filled-square substitution
+        # that Helvetica produces for em-dashes, smart quotes, bullets, etc.
+        markdown_content = _normalize_for_pdf(markdown_content)
+        topic = _normalize_for_pdf(topic)
+
         doc = SimpleDocTemplate(
             str(out_path),
             pagesize=A4,
-            leftMargin=2.2 * cm,
-            rightMargin=2.2 * cm,
-            topMargin=1.8 * cm,
-            bottomMargin=2.0 * cm,
+            leftMargin=1.4 * cm,
+            rightMargin=1.4 * cm,
+            topMargin=1.0 * cm,
+            bottomMargin=1.2 * cm,
             title=f"Competitive Intelligence Briefing: {topic}",
             author="Competitive Intelligence Briefing Crew",
         )

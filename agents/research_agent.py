@@ -199,6 +199,9 @@ def _enrich_sources(sources: List[SourceDocument]) -> List[SourceDocument]:
                         "[research] Skip %s — %s",
                         src.url[:60], result["error"],
                     )
+                    # Keep snippet as raw_content fallback so analyst always has text
+                    if not src.raw_content and src.summary:
+                        src.raw_content = src.summary
                 elif result.get("text"):
                     src.raw_content = result["text"]
                     if result.get("title") and not src.title:
@@ -223,6 +226,17 @@ def _enrich_sources(sources: List[SourceDocument]) -> List[SourceDocument]:
                     )
                 else:
                     skip_count += 1
+                    # Keep snippet as raw_content fallback
+                    if not src.raw_content and src.summary:
+                        src.raw_content = src.summary
+            else:
+                # No fetch result at all — use snippet
+                if not src.raw_content and src.summary:
+                    src.raw_content = src.summary
+        else:
+            # Not fetched (beyond fetch_limit) — use snippet as content
+            if not src.raw_content and src.summary:
+                src.raw_content = src.summary
         enriched.append(src)
 
     logger.info(

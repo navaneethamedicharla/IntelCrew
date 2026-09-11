@@ -207,7 +207,9 @@ def get_llm_base_url() -> str:
     if _is_real_key(OPENROUTER_API_KEY):
         return "https://openrouter.ai/api/v1"
     if _is_real_key(GROQ_API_KEY):
-        llm_config.model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+        # Use the LLM_MODEL env var as-is — Groq's API accepts its own model IDs
+        # (e.g. "groq/compound-mini") directly.
+        llm_config.model = os.getenv("LLM_MODEL", "groq/compound-mini")
         return "https://api.groq.com/openai/v1"
     return "https://api.openai.com/v1"
 

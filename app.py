@@ -246,7 +246,7 @@ html, body, [data-testid="stAppViewContainer"] * {
     border: 1px solid var(--border-subtle);
 }
 [data-testid="stAlert"] p {
-    color: #0b1120 !important;
+    color: #ffffff !important;
 }
 
 /* ── Code blocks ── */
@@ -377,6 +377,11 @@ hr {
     padding: 24px;
     line-height: 1.8;
     border: 1px solid var(--border-subtle);
+    /* Prevent long tokens (prices, URLs, formulas) from blowing out the layout */
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    overflow-x: hidden;
+    white-space: normal;
 }
 .report-container h1,
 .report-container h2,
@@ -782,10 +787,20 @@ def render_sidebar() -> Dict[str, Any]:
             or os.getenv("GROQ_API_KEY")
         )
         if has_key:
-            st.markdown('<span class="pill pill-teal">● Key configured</span>', unsafe_allow_html=True)
+            st.markdown('<span class="pill pill-teal">● LLM key configured</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="pill pill-danger">● No API key found</span>', unsafe_allow_html=True)
+            st.markdown('<span class="pill pill-danger">● No LLM key found</span>', unsafe_allow_html=True)
             st.caption("Set OPENROUTER_API_KEY in .env")
+
+        # Tavily search status
+        tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+        tavily_active = bool(tavily_key) and len(tavily_key) >= 20 and not tavily_key.startswith("your_")
+        if tavily_active:
+            st.markdown('<span class="pill pill-teal">🔍 Tavily search active</span>', unsafe_allow_html=True)
+            st.caption("Real-time web search enabled")
+        else:
+            st.markdown('<span class="pill pill-muted">🔍 Tavily not configured</span>', unsafe_allow_html=True)
+            st.caption("Set TAVILY_API_KEY in .env for real-time data")
 
         st.divider()
         # Run button
@@ -918,6 +933,42 @@ def render_execution_trace(state: Dict) -> None:
 
 
 # ── Report viewer ──────────────────────────────────────────────────────────────
+def _section_to_html(text: str) -> str:
+    """
+    Convert a report section (plain markdown prose) to HTML for safe rendering
+    inside a report-container div.
+
+    Converts via the `markdown` library when available; falls back to a minimal
+    regex path. Either way, dollar signs are escaped BEFORE conversion so
+    Streamlit never interprets $...$ sequences as LaTeX math mode (which strips
+    spaces and produces the horizontal-overflow italic runs seen in the UI).
+    """
+    # Escape $ so Streamlit/MathJax never treats it as LaTeX delimiter.
+    # Use the HTML entity &#36; — invisible to the reader, safe in HTML.
+    safe_text = text.replace("$", "&#36;")
+
+    try:
+        import markdown as _md
+        return _md.markdown(
+            safe_text,
+            extensions=["tables", "fenced_code", "nl2br"],
+        )
+    except ImportError:
+        pass
+
+    # Minimal regex fallback
+    import re as _re
+    t = safe_text
+    t = _re.sub(r"^## (.+)$",  r"<h2>\1</h2>",  t, flags=_re.M)
+    t = _re.sub(r"^### (.+)$", r"<h3>\1</h3>",  t, flags=_re.M)
+    t = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
+    t = _re.sub(r"_(.+?)_",    r"<em>\1</em>",   t)
+    t = _re.sub(r"^[-*] (.+)$", r"<li>\1</li>",  t, flags=_re.M)
+    t = _re.sub(r"(<li>.*?</li>\n?)+", r"<ul>\g<0></ul>", t, flags=_re.S)
+    t = _re.sub(r"^(?!<)(.+)$", r"<p>\1</p>",    t, flags=_re.M)
+    return t
+
+
 def render_report(state: Dict) -> None:
     """Render the final report in tabbed sections."""
     report = state.get("final_report")
@@ -945,22 +996,23 @@ def render_report(state: Dict) -> None:
     ])
 
     with tabs[0]:
-        st.markdown(f'<div class="report-container">{report.executive_summary}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.executive_summary or "")}</div>', unsafe_allow_html=True)
     with tabs[1]:
-        st.markdown(f'<div class="report-container">{report.competitor_pricing}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.competitor_pricing or "")}</div>', unsafe_allow_html=True)
     with tabs[2]:
-        st.markdown(f'<div class="report-container">{report.product_updates}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.product_updates or "")}</div>', unsafe_allow_html=True)
     with tabs[3]:
-        st.markdown(f'<div class="report-container">{report.market_signals}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.market_signals or "")}</div>', unsafe_allow_html=True)
     with tabs[4]:
-        st.markdown(f'<div class="report-container">{report.business_risks}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.business_risks or "")}</div>', unsafe_allow_html=True)
     with tabs[5]:
-        st.markdown(f'<div class="report-container">{report.strategic_recommendations}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(report.strategic_recommendations or "")}</div>', unsafe_allow_html=True)
     with tabs[6]:
         opportunities = getattr(report, "opportunities", "") or "_No opportunities section generated._"
-        st.markdown(f'<div class="report-container">{opportunities}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="report-container">{_section_to_html(opportunities)}</div>', unsafe_allow_html=True)
     with tabs[7]:
-        st.markdown(report.markdown_content, unsafe_allow_html=False)
+        # Full report tab: escape $ for display, use st.markdown with raw=False
+        st.markdown(report.markdown_content.replace("$", r"\$"), unsafe_allow_html=False)
 
 
 # ── Source cards ───────────────────────────────────────────────────────────────
@@ -1146,6 +1198,9 @@ def render_downloads(state: Dict) -> None:
     topic = report.topic
     run_id = state.get("run_id", "")
     md_content = report.markdown_content
+    # Use the lean pdf_markdown (no Run Metadata / Audit pages) for PDF export.
+    # Fall back to full markdown_content if pdf_markdown wasn't populated (old reports).
+    pdf_content = getattr(report, "pdf_markdown", None) or md_content
 
     col1, col2 = st.columns(2)
 
@@ -1163,7 +1218,7 @@ def render_downloads(state: Dict) -> None:
             with st.spinner("Generating PDF..."):
                 try:
                     export_md, export_pdf = _import_exporters()
-                    pdf_path = export_pdf(md_content, topic, run_id=run_id)
+                    pdf_path = export_pdf(pdf_content, topic, run_id=run_id)
                     if pdf_path and Path(pdf_path).exists():
                         pdf_bytes = Path(pdf_path).read_bytes()
                         st.download_button(
@@ -1240,7 +1295,7 @@ def render_approval_gate(state: Dict) -> Optional[bool]:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("✅ Approve & Publish Report", type="primary", use_container_width=True):
+        if st.button("✅ Approve Report", type="primary", use_container_width=True):
             return True
     with col2:
         if st.button("🔄 Request Revision", type="secondary", use_container_width=True):
