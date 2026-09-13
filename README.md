@@ -21,7 +21,7 @@ User Input (Streamlit)
        ▼
 ┌─────────────┐
 │   Analyst   │  – LLM extracts competitor profiles, claims, market signals
-│   Agent     │
+│   Agent     │    + second-pass section syntheses for all 7 report sections
 └──────┬──────┘
        ▼
 ┌─────────────┐
@@ -62,7 +62,7 @@ User Input (Streamlit)
 
 ```bash
 # 1. Clone / navigate to project
-cd C:\projects\capstone\competitive-intelligence-crew
+cd C:\projects\IntelCrew\competitive-intelligence-crew
 
 # 2. Create virtual environment
 python -m venv venv
@@ -98,16 +98,26 @@ Copy `.env.example` to `.env` and configure:
 | `OPENAI_API_KEY` | One of these three | OpenAI API key |
 | `GROQ_API_KEY` | One of these three | Groq API key (fast, free tier) |
 | `LLM_MODEL` | Yes | Model ID matching your provider (see below) |
+<<<<<<< HEAD
 | `TAVILY_API_KEY` | Yes | Tavily search (more reliable than DDG) |
+=======
+| `LLM_PROVIDER` | Optional | `openrouter` / `groq` / `openai` — inferred from key if omitted |
+| `LLM_TEMPERATURE` | Optional | Defaults to `0.1` |
+| `LLM_MAX_TOKENS` | Optional | Defaults to `8192` |
+| `TAVILY_API_KEY` | Optional | Tavily search (more reliable than DDG) |
+>>>>>>> 4735ac3 (Readme updated)
 | `LANGSMITH_API_KEY` | Optional | LangSmith tracing |
-| `RAG_ENABLED` | Optional | `true`/`false` — enable FAISS knowledge base |
+| `RAG_ENABLED` | Optional | `true`/`false` — enable FAISS knowledge base (default `true`) |
+| `MAX_SEARCH_RESULTS` | Optional | Max sources to collect per run (default `15`) |
+| `MAX_WORKFLOW_STEPS` | Optional | Max LangGraph steps before termination (default `20`) |
+| `REQUEST_TIMEOUT` | Optional | HTTP timeout in seconds (default `60`) |
 
 ### Model IDs by provider
 
 | Provider | Example model |
 |---|---|
 | OpenRouter | `meta-llama/llama-3.3-70b-instruct:free` or `openai/gpt-4o-mini` |
-| Groq | `llama-3.3-70b-versatile` |
+| Groq | `groq/compound-mini` or `llama-3.3-70b-versatile` |
 | OpenAI | `gpt-4o-mini` |
 
 **Note:** If both `OPENROUTER_API_KEY` and `GROQ_API_KEY` are set, OpenRouter takes priority. Remove one to use the other.
@@ -118,7 +128,7 @@ Copy `.env.example` to `.env` and configure:
 OPENROUTER_API_KEY=sk-or-v1-...
 LLM_MODEL=meta-llama/llama-3.3-70b-instruct:free
 LLM_TEMPERATURE=0.1
-LLM_MAX_TOKENS=4096
+LLM_MAX_TOKENS=8192
 APP_ENV=development
 LOG_LEVEL=INFO
 RAG_ENABLED=false
@@ -128,9 +138,9 @@ RAG_ENABLED=false
 
 ```env
 GROQ_API_KEY=gsk_...
-LLM_MODEL=llama-3.3-70b-versatile
+LLM_MODEL=groq/compound-mini
 LLM_TEMPERATURE=0.1
-LLM_MAX_TOKENS=4096
+LLM_MAX_TOKENS=8192
 APP_ENV=development
 LOG_LEVEL=INFO
 RAG_ENABLED=false
@@ -142,10 +152,11 @@ RAG_ENABLED=false
 
 1. Enter a research topic in the sidebar (e.g. "Salesforce vs HubSpot CRM 2025")
 2. Adjust **Max Sources** (3–20) and **Max Workflow Steps**
-3. Click **🚀 Run Intelligence Briefing**
-4. Watch the live agent progress bar
-5. Review the report preview and click **✅ Approve & Publish Report**
-6. Download as **Markdown** or **PDF**
+3. Optionally enable **RAG Knowledge Base** and upload your own documents (PDF, DOCX, TXT, CSV)
+4. Click **🚀 Run Intelligence Briefing**
+5. Watch the live agent progress pipeline
+6. Review the report preview and click **✅ Approve & Publish Report**
+7. Download as **Markdown** or **PDF**
 
 ### Sample Topics
 
@@ -171,10 +182,12 @@ Validates the topic, initialises run metadata, and sets the workflow phase.
 - **Never returns 0 sources** — injects a Wikipedia fallback if all searches fail
 
 ### 3. Analyst Agent
-Uses the LLM to extract:
-- Competitor profiles (pricing, products, partnerships, acquisitions)
-- Individual factual claims with categories
+Uses the LLM to extract (per article):
+- Competitor profiles (pricing, products, partnerships, acquisitions, AI features)
+- Individual factual claims with categories and supporting evidence
 - Market signals, technology trends, customer trends
+
+After per-article extraction, runs a **second-pass synthesis** — the LLM produces a structured ~150-word narrative for each of the 7 report sections, which the Writer Agent then compresses into tight executive prose.
 
 ### 4. Fact Verification Agent
 Lenient verification policy:
@@ -194,7 +207,7 @@ Generates 7 LLM sections:
 6. Strategic Recommendations
 7. Opportunities
 
-Each section includes `[Unverified]` markers where claims lack direct source support.
+Each section is written for a C-suite reader: one opening insight, 3–5 key points, one "so what" close. Verified findings are stated confidently; unverified are prefixed with `Unconfirmed —`.
 
 ### 6. Governance Agent
 Checks:
@@ -214,14 +227,39 @@ After a run completes:
 
 | Tab | Contents |
 |---|---|
-| 📄 Report | 8-section tabbed report viewer |
+| 📄 Report | 7-section tabbed viewer (Executive Summary, Pricing, Products, Market Signals, Risks, Recommendations, Opportunities) + Full Report |
 | 🔗 Citations | Numbered source list with URLs |
-| 🗂️ Sources | Card view of all collected sources |
+| 🗂️ Sources | Card view of all collected sources with relevance score and trusted-domain badge |
 | ⬇️ Download | Markdown + PDF export |
-| 📊 Evaluation | Full metrics dashboard |
-| 🔍 Execution Trace | Timestamped agent activity log |
+| 📊 Evaluation | Full metrics dashboard (run stats, claim breakdown, governance result) |
+| 🔍 Execution Trace | Timestamped agent activity log (last 50 entries) |
 | 📋 Audit Log | Governance and compliance events |
 | ❌ Errors | Any errors with full messages |
+
+---
+
+## RAG Knowledge Base
+
+Enable the **RAG Knowledge Base** toggle in the sidebar to augment the pipeline with your own documents:
+
+1. Toggle **Enable RAG Knowledge Base** in the sidebar
+2. Upload one or more files (PDF, DOCX, TXT, or CSV)
+3. Click **🗄️ Index Documents** — files are chunked and stored in a local FAISS vectorstore under `data/vectorstore/`
+4. Run a briefing — the Research Agent will query the knowledge base alongside web sources
+
+The embedding model is `sentence-transformers/all-MiniLM-L6-v2` (~90 MB, downloaded on first use and cached automatically).
+
+---
+
+## Groq Model Fallback
+
+When using Groq, the app automatically rotates through a fallback chain if the current model hits its daily quota (TPD/RPD limits):
+
+```
+openai/gpt-oss-20b  →  openai/gpt-oss-120b  →  groq/compound-mini
+```
+
+No manual action needed — the switch happens transparently mid-run. The active model resets on app restart. Daily limits reset at midnight UTC.
 
 ---
 
@@ -238,6 +276,16 @@ pytest tests/test_integration.py -v -m "not slow"
 pytest tests/test_integration.py -v -m "slow"
 ```
 
+### Quick Smoke Test
+
+A lightweight end-to-end script is included to validate the core pipeline (Research → Analyst → Writer) without the full Streamlit UI:
+
+```bash
+python smoke_final.py
+```
+
+This runs the three core agents on a fixed topic and prints a section-by-section pass/fail summary with character counts.
+
 ---
 
 ## Troubleshooting
@@ -247,6 +295,7 @@ pytest tests/test_integration.py -v -m "slow"
 - Make sure `.env` exists (not just `.env.example`)
 - Restart Streamlit after editing `.env`
 - Check the key matches the provider (OpenRouter keys start with `sk-or-v1-`, Groq keys start with `gsk_`)
+- Placeholder values like `your_openai_api_key_here` are automatically ignored
 
 ### ❌ No report generated / workflow ends early
 
@@ -257,15 +306,25 @@ pytest tests/test_integration.py -v -m "slow"
 
 ### ❌ DuckDuckGo rate limit
 
+Add a Tavily key for more reliable real-time search:
+
 ```env
 TAVILY_API_KEY=tvly-...   # Get free at https://tavily.com
 ```
 
+### ❌ Groq daily quota exhausted
+
+The app will automatically fall back to the next model in the chain. If all Groq models are exhausted, wait until midnight UTC for limits to reset, or switch to an OpenRouter key.
+
 ### ❌ Report sections are empty
 
-The LLM model may not be smart enough for complex analysis. Try a larger model:
+The LLM model may not be capable enough for complex analysis. Try a larger model:
 - OpenRouter: `openai/gpt-4o-mini` (requires credits)
 - Groq: `llama-3.3-70b-versatile` (free tier)
+
+### ❌ Dollar signs in reports show as garbled text
+
+This is handled automatically — `$` characters in report sections are escaped to prevent Streamlit from interpreting them as LaTeX math. No action needed.
 
 ### ❌ weasyprint PDF error on Windows
 
@@ -273,7 +332,7 @@ weasyprint requires GTK which is complex to install on Windows. The app falls ba
 
 ### ❌ sentence-transformers slow to load
 
-The first run downloads the embedding model (~90MB). Subsequent runs use the cache and are faster.
+The first run downloads the embedding model (~90 MB). Subsequent runs use the cache and are faster.
 
 ---
 
@@ -281,18 +340,19 @@ The first run downloads the embedding model (~90MB). Subsequent runs use the cac
 
 ```
 competitive-intelligence-crew/
-├── app.py                    # Streamlit UI
-├── config.py                 # Environment config, LLM setup
+├── app.py                    # Streamlit UI + all render functions
+├── config.py                 # Environment config, LLM setup, Pydantic models
+├── smoke_final.py            # Quick end-to-end smoke test (no UI)
 ├── requirements.txt
 ├── .env.example
 ├── agents/
 │   ├── state.py              # All Pydantic models + BriefingState TypedDict
-│   ├── base_agent.py         # Shared LLM client, trace/audit helpers
+│   ├── base_agent.py         # Shared LLM client, Groq model fallback, retry logic
 │   ├── supervisor.py
 │   ├── research_agent.py
-│   ├── analyst_agent.py
+│   ├── analyst_agent.py      # Per-article extraction + section synthesis pass
 │   ├── fact_verification_agent.py
-│   └── writer_agent.py
+│   └── writer_agent.py       # C-suite-focused section writer
 ├── graph/
 │   ├── workflow.py           # LangGraph graph build + run/stream functions
 │   ├── edges.py              # Conditional routing functions
@@ -309,14 +369,14 @@ competitive-intelligence-crew/
 │   ├── report_generator.py
 │   ├── citation_generator.py
 │   ├── html_parser.py
-│   ├── pdf_export.py
+│   ├── pdf_export.py         # ReportLab PDF (WeasyPrint/xhtml2pdf if available)
 │   ├── markdown_export.py
 │   └── audit_logger.py
 ├── rag/
-│   ├── knowledge_base.py
+│   ├── knowledge_base.py     # FAISS vectorstore build + persist
 │   ├── retriever.py
-│   ├── embeddings.py
-│   ├── document_loader.py
+│   ├── embeddings.py         # sentence-transformers/all-MiniLM-L6-v2
+│   ├── document_loader.py    # PDF, DOCX, TXT, CSV loaders
 │   └── chunker.py
 ├── evaluation/
 │   ├── test_suite.py
@@ -324,8 +384,8 @@ competitive-intelligence-crew/
 │   └── metrics.py
 ├── tests/
 │   └── test_integration.py
-├── reports/                  # Generated reports saved here
-├── logs/                     # Application logs
+├── reports/                  # Generated PDF reports saved here
+├── logs/                     # Application logs (app.log)
 └── data/                     # FAISS vectorstore
 ```
 
