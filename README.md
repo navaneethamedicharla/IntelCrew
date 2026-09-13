@@ -98,14 +98,10 @@ Copy `.env.example` to `.env` and configure:
 | `OPENAI_API_KEY` | One of these three | OpenAI API key |
 | `GROQ_API_KEY` | One of these three | Groq API key (fast, free tier) |
 | `LLM_MODEL` | Yes | Model ID matching your provider (see below) |
-<<<<<<< HEAD
-| `TAVILY_API_KEY` | Yes | Tavily search (more reliable than DDG) |
-=======
 | `LLM_PROVIDER` | Optional | `openrouter` / `groq` / `openai` — inferred from key if omitted |
 | `LLM_TEMPERATURE` | Optional | Defaults to `0.1` |
 | `LLM_MAX_TOKENS` | Optional | Defaults to `8192` |
 | `TAVILY_API_KEY` | Optional | Tavily search (more reliable than DDG) |
->>>>>>> 4735ac3 (Readme updated)
 | `LANGSMITH_API_KEY` | Optional | LangSmith tracing |
 | `RAG_ENABLED` | Optional | `true`/`false` — enable FAISS knowledge base (default `true`) |
 | `MAX_SEARCH_RESULTS` | Optional | Max sources to collect per run (default `15`) |
